@@ -15,7 +15,7 @@ Perfect for writing weekly reports, standups, or just keeping track of what you'
 - 🧹 Flattens multi-line commit messages into a single clean line
 - 📂 **Organizes output by repository and branch**
 - 📁 **Separate file per repository** in organized folder structure
-- � **Saves reports to** `reports/<date>/` with individual `.txt` files
+- 💾 **Saves reports to** `reports/<date>/` with individual `.txt` files
 
 Example output structure:
 
