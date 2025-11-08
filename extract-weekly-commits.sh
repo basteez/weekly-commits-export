@@ -19,6 +19,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 COMMIT_DETAIL="full"  # Default to full commit details
+USER_EMAIL=""  # Will be read from config file or fallback to git config
 
 while IFS= read -r line; do
   # Read BASE_PATH
@@ -36,13 +37,28 @@ while IFS= read -r line; do
     COMMIT_DETAIL=$(echo "$COMMIT_DETAIL" | sed 's/#.*$//' | sed 's/[[:space:]]*$//')
     echo "🔧 Commit detail level: $COMMIT_DETAIL"
   fi
+  
+  # Read USER_EMAIL
+  if [[ "$line" =~ ^[[:space:]]*USER_EMAIL[[:space:]]*=[[:space:]]*(.+)[[:space:]]*$ ]]; then
+    USER_EMAIL="${BASH_REMATCH[1]}"
+    # Remove any trailing comments
+    USER_EMAIL=$(echo "$USER_EMAIL" | sed 's/#.*$//' | sed 's/[[:space:]]*$//')
+    echo "🔧 Using email(s) from config: $USER_EMAIL"
+  fi
 done < "$CONFIG_FILE"
 
-# Get the email from git config
-GIT_EMAIL=$(git config user.email 2>/dev/null || echo "")
-if [ -z "$GIT_EMAIL" ]; then
-  echo "⚠️  Git user.email not set. Please set it with: git config user.email 'you@example.com'"
-  exit 1
+# Get the email from config or fallback to git config
+if [ -z "$USER_EMAIL" ]; then
+  USER_EMAIL=$(git config user.email 2>/dev/null || echo "")
+  if [ -z "$USER_EMAIL" ]; then
+    echo "⚠️  No email configured. Please set USER_EMAIL in $CONFIG_FILE or configure git user.email"
+    echo "💡 Examples:"
+    echo "   USER_EMAIL=you@example.com"
+    echo "   USER_EMAIL=work@company.com,personal@gmail.com"
+    echo "   git config user.email 'you@example.com'"
+    exit 1
+  fi
+  echo "🔧 Using git configured email: $USER_EMAIL"
 fi
 
 # Compute Monday and Friday of the current week
@@ -72,7 +88,7 @@ EXPORT_DAY=$(date +%Y-%m-%d)
 REPORTS_DIR="reports/$EXPORT_DAY"
 mkdir -p "$REPORTS_DIR"
 
-echo "📦 Extracting commits by '$GIT_EMAIL' from $MONDAY to $FRIDAY..."
+echo "📦 Extracting commits by '$USER_EMAIL' from $MONDAY to $FRIDAY..."
 echo "📁 Reports will be saved to: $REPORTS_DIR"
 echo ""
 
@@ -112,7 +128,7 @@ extract_repo_commits() {
   echo "# Weekly Commits Report" > "$repo_output_file"
   echo "Repository: $repo_path" >> "$repo_output_file"
   echo "Period: $MONDAY to $FRIDAY" >> "$repo_output_file"
-  echo "Author: $GIT_EMAIL" >> "$repo_output_file"
+  echo "Author: $USER_EMAIL" >> "$repo_output_file"
   echo "Generated: $(date)" >> "$repo_output_file"
   echo "" >> "$repo_output_file"
   
@@ -146,24 +162,54 @@ extract_repo_commits() {
     fi
     
     # Count commits first (before text processing)
-    local commit_count=$(git rev-list \
-      --author="$GIT_EMAIL" \
-      --since="$MONDAY 00:00" \
-      --until="$FRIDAY 23:59" \
-      --count \
-      "$branch" 2>/dev/null)
+    # Handle multiple emails by splitting and querying each one
+    local commit_count=0
+    local all_commits=""
     
-    # Get formatted commit text
-    local commits=$(git log \
-      --author="$GIT_EMAIL" \
-      --since="$MONDAY 00:00" \
-      --until="$FRIDAY 23:59" \
-      --pretty=format:"$git_format" \
-      --date=format:"%d-%m-%Y %H:%M" \
-      "$branch" 2>/dev/null | \
-      sed 's/[\r\n]\+/ /g' | \
-      sed 's/  */ /g' | \
-      sed 's/^ *//; s/ *$//')
+    # Convert comma-separated emails to array
+    IFS=',' read -ra EMAIL_ARRAY <<< "$USER_EMAIL"
+    
+    for email in "${EMAIL_ARRAY[@]}"; do
+      # Trim whitespace
+      email=$(echo "$email" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      
+      # Get commit count for this email
+      local email_commit_count=$(git rev-list \
+        --author="$email" \
+        --since="$MONDAY 00:00" \
+        --until="$FRIDAY 23:59" \
+        --count \
+        "$branch" 2>/dev/null)
+      
+      # Get formatted commit text for this email
+      local email_commits=$(git log \
+        --author="$email" \
+        --since="$MONDAY 00:00" \
+        --until="$FRIDAY 23:59" \
+        --pretty=format:"$git_format" \
+        --date=format:"%d-%m-%Y %H:%M" \
+        "$branch" 2>/dev/null | \
+        sed 's/[\r\n]\+/ /g' | \
+        sed 's/  */ /g' | \
+        sed 's/^ *//; s/ *$//')
+      
+      # Add to totals
+      commit_count=$((commit_count + email_commit_count))
+      if [ -n "$email_commits" ]; then
+        if [ -n "$all_commits" ]; then
+          all_commits="$all_commits"$'\n'"$email_commits"
+        else
+          all_commits="$email_commits"
+        fi
+      fi
+    done
+    
+    # Sort all commits by date (newest first)
+    if [ -n "$all_commits" ]; then
+      commits=$(echo "$all_commits" | sort -r)
+    else
+      commits=""
+    fi
     
     popd > /dev/null
     
@@ -207,7 +253,7 @@ extract_repo_commits() {
 # Read configuration file and process repositories
 while IFS=':' read -r repo_path branches; do
   # Skip empty lines, comments, and configuration variables
-    if [ -z "$repo_path" ] || [[ "$repo_path" =~ ^[[:space:]]*# ]] || [[ "$repo_path" =~ ^[[:space:]]*BASE_PATH[[:space:]]*= ]] || [[ "$repo_path" =~ ^[[:space:]]*COMMIT_DETAIL[[:space:]]*=.*[[:space:]]*$ ]]; then  
+    if [ -z "$repo_path" ] || [[ "$repo_path" =~ ^[[:space:]]*# ]] || [[ "$repo_path" =~ ^[[:space:]]*BASE_PATH[[:space:]]*= ]] || [[ "$repo_path" =~ ^[[:space:]]*COMMIT_DETAIL[[:space:]]*=.*[[:space:]]*$ ]] || [[ "$repo_path" =~ ^[[:space:]]*USER_EMAIL[[:space:]]*=.*[[:space:]]*$ ]]; then  
     continue
   fi
   
